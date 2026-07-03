@@ -1,0 +1,17 @@
+ConvNextV2-Base AugMax (image-only):
+https://www.kaggle.com/code/yacineabdelouhab/kaggle-convnextv2-base-augmax
+
+ConvNextV2-Base Multimodal:
+https://www.kaggle.com/code/yacineabdelouhab/kaggle-convnextv2-base-multimodal
+
+DeiT3-Base Multimodal:
+https://www.kaggle.com/code/yacineabdelouhab/kaggle-deit3-base-multimodal
+
+Swin-Base Multimodal:
+https://www.kaggle.com/code/yacineabdelouhab/kaggle-swin-base-multimodal
+
+CoatNet-1 Image-only:
+https://www.kaggle.com/code/yacineabdelouhab/kaggle-coatnet1-imgonly
+
+Blend:
+https://www.kaggle.com/code/yacineabdelouhab/kaggle-blend

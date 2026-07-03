@@ -1,0 +1,10 @@
+streamlit
+torch
+torchvision
+timm==1.0.3
+albumentations
+opencv-python-headless
+Pillow
+numpy
+huggingface_hub
+sentence-transformers
