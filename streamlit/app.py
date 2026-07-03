@@ -153,9 +153,8 @@ st.subheader("Food Calorie Estimator")
 st.write("Upload a photo of a food dish and the model will estimate its calorie content.")
 st.divider()
 
-# Préchargement au démarrage — AugMax + mpnet toujours en cache
+# AugMax préchargé au démarrage (100MB seulement)
 load_default()
-load_embedder()
 
 choice = st.selectbox("Modèle", options=list(MODELS.keys()), index=0)
 st.caption(MODELS[choice]["desc"])
