@@ -1,3 +1,4 @@
+import gc
 import cv2
 import numpy as np
 import streamlit as st
@@ -8,10 +9,6 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import timm
 from huggingface_hub import hf_hub_download, snapshot_download
-
-# ──────────────────────────────────────────────────────────────
-#  FOODSCAN — CALORIE ESTIMATOR
-# ──────────────────────────────────────────────────────────────
 
 st.set_page_config(
     page_title="FoodScan — Calorie Estimator",
@@ -27,11 +24,10 @@ PRED_MAX = 3600.0
 TEXT_DIM = 768
 
 MODELS = {
-    "ConvNextV2-AugMax (défaut)": {
+    "ConvNextV2-AugMax": {
         "file"    : "convnextv2_base_augmax_full.pth",
         "backbone": "convnextv2_base.fcmae_ft_in22k_in1k",
         "type"    : "imgonly",
-        "quantize": False,
         "img_size": False,
         "desc"    : "ConvNextV2-Base, augmentation agressive, image-only.",
     },
@@ -39,12 +35,10 @@ MODELS = {
         "file"    : "convnextv2_base_mm_full.pth",
         "backbone": "convnextv2_base.fcmae_ft_in22k_in1k",
         "type"    : "mm",
-        "quantize": False,
         "img_size": False,
         "desc"    : "ConvNextV2-Base + description texte (mpnet 768-dim).",
     },
 }
-DEFAULT_MODEL = "ConvNextV2-AugMax (défaut)"
 
 
 # ── MODEL BUILDERS ────────────────────────────────────────────
@@ -55,7 +49,6 @@ def build_model(cfg):
         kwargs['img_size'] = IMG_SIZE
     backbone = timm.create_model(cfg["backbone"], **kwargs)
     d = backbone.num_features
-
     if cfg["type"] == "mm":
         fused = d + TEXT_DIM
         head  = nn.Sequential(
@@ -67,7 +60,7 @@ def build_model(cfg):
         class MM(nn.Module):
             def __init__(self): super().__init__(); self.backbone=backbone; self.head=head
             def forward(self, img, emb): return self.head(torch.cat([self.backbone(img), emb], 1)).squeeze(1)
-        model = MM()
+        return MM()
     else:
         head = nn.Sequential(
             nn.LayerNorm(d),
@@ -78,9 +71,7 @@ def build_model(cfg):
         class IO(nn.Module):
             def __init__(self): super().__init__(); self.backbone=backbone; self.head=head
             def forward(self, img): return self.head(self.backbone(img)).squeeze(1)
-        model = IO()
-
-    return model
+        return IO()
 
 
 # ── TRANSFORMS ───────────────────────────────────────────────
@@ -100,47 +91,42 @@ def pil_to_tensor(image):
     return t, torch.flip(t, dims=[3])
 
 
-# ── MODEL LOADING ─────────────────────────────────────────────
+# ── INFERENCE SÉQUENTIELLE (sans cache pour libérer la RAM) ──
 
-@st.cache_resource(show_spinner="Chargement du modèle par défaut...")
-def load_default():
-    cfg   = MODELS[DEFAULT_MODEL]
+def run_imgonly(cfg, tensor, tensor_flip) -> float:
     path  = hf_hub_download(repo_id=HF_REPO, filename=cfg["file"])
     model = build_model(cfg)
     ckpt  = torch.load(path, map_location='cpu', weights_only=False)
     model.load_state_dict(ckpt.get('model_state', ckpt))
     model.eval()
-    return model
+    with torch.no_grad():
+        p, p_flip = model(tensor), model(tensor_flip)
+    pred = float(((p + p_flip) / 2).item())
+    del model, ckpt; gc.collect()
+    return float(np.clip(np.expm1(pred), PRED_MIN, PRED_MAX))
 
-@st.cache_resource(show_spinner="Chargement du modèle...")
-def load_model_cached(name):
-    cfg   = MODELS[name]
-    path  = hf_hub_download(repo_id=HF_REPO, filename=cfg["file"])
-    model = build_model(cfg)
-    ckpt  = torch.load(path, map_location='cpu', weights_only=False)
-    model.load_state_dict(ckpt.get('model_state', ckpt))
-    model.eval()
-    return model
-
-@st.cache_resource(show_spinner="Chargement du modèle d'embedding...")
-def load_embedder():
+def run_mm(cfg, tensor, tensor_flip, description: str) -> float:
+    # 1. Embed — charge mpnet, encode, libère
     from sentence_transformers import SentenceTransformer
     import os
     model_path = snapshot_download(repo_id=HF_REPO, allow_patterns="all-mpnet-base-v2/*")
-    return SentenceTransformer(os.path.join(model_path, "all-mpnet-base-v2"), device='cpu')
+    embedder   = SentenceTransformer(os.path.join(model_path, "all-mpnet-base-v2"), device='cpu')
+    emb = torch.tensor(
+        embedder.encode([description], normalize_embeddings=True).astype('float32')[0]
+    ).unsqueeze(0)
+    del embedder; gc.collect()
 
-def embed_text(description: str) -> torch.Tensor:
-    emb = load_embedder().encode([description], normalize_embeddings=True).astype('float32')[0]
-    return torch.tensor(emb).unsqueeze(0)
-
-def predict(model, cfg, tensor, tensor_flip, emb=None) -> float:
+    # 2. Inférence — charge le modèle MM, prédit, libère
+    path  = hf_hub_download(repo_id=HF_REPO, filename=cfg["file"])
+    model = build_model(cfg)
+    ckpt  = torch.load(path, map_location='cpu', weights_only=False)
+    model.load_state_dict(ckpt.get('model_state', ckpt))
+    model.eval()
     with torch.no_grad():
-        if cfg["type"] == "mm":
-            emb = emb if emb is not None else torch.zeros(1, TEXT_DIM)
-            p, p_flip = model(tensor, emb), model(tensor_flip, emb)
-        else:
-            p, p_flip = model(tensor), model(tensor_flip)
-    return float(np.clip(np.expm1(float(((p + p_flip) / 2).item())), PRED_MIN, PRED_MAX))
+        p, p_flip = model(tensor, emb), model(tensor_flip, emb)
+    pred = float(((p + p_flip) / 2).item())
+    del model, ckpt; gc.collect()
+    return float(np.clip(np.expm1(pred), PRED_MIN, PRED_MAX))
 
 
 # ── PAGE ──────────────────────────────────────────────────────
@@ -162,7 +148,6 @@ if uploaded_file and is_mm:
     description = st.text_area(
         "Décrivez le contenu de l'assiette",
         placeholder="Ex: pasta bolognaise avec parmesan et basilic...",
-        help="La description améliore la précision du modèle multimodal."
     )
 
 if uploaded_file is not None:
@@ -175,20 +160,18 @@ if uploaded_file is not None:
 
     with col2:
         try:
+            cfg = MODELS[choice]
             with st.spinner("Inférence en cours..."):
-                load_default()  # toujours en cache
-                model = load_default() if choice == DEFAULT_MODEL else load_model_cached(choice)
-
-                emb = None
-                if is_mm and description and description.strip():
-                    with st.spinner("Encodage de la description..."):
-                        emb = embed_text(description.strip())
-
-                result = predict(model, MODELS[choice], tensor, tensor_flip, emb)
+                if is_mm:
+                    if description and description.strip():
+                        result = run_mm(cfg, tensor, tensor_flip, description.strip())
+                    else:
+                        st.info("💡 Ajoutez une description pour utiliser le mode multimodal.")
+                        result = run_imgonly(cfg, tensor, tensor_flip)
+                else:
+                    result = run_imgonly(cfg, tensor, tensor_flip)
 
             st.metric(label="Calories estimées", value=f"{result:.0f} kcal")
-            if is_mm and not (description and description.strip()):
-                st.info("💡 Ajoutez une description pour améliorer la précision.")
 
         except Exception as e:
             st.error(f"Erreur : {e}")
