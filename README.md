@@ -1,6 +1,6 @@
 # FoodScan Challenge
 
-Final project for the Deep Learning For Images course (M2 IASD Apprenticeship, Dauphine).
+Final project for the Deep Learning For Images course (M2 IASD Apprenticeship, Université Paris Dauphine – PSL).
 
 Goal: predict the number of calories in a dish from a single photo. It's a Kaggle competition: https://www.kaggle.com/competitions/m2-food-calorie-estimation
 
@@ -34,7 +34,3 @@ cd streamlit
 pip install -r requirements.txt
 streamlit run app.py
 ```
-
-## Team
-
-To fill in with both names.
