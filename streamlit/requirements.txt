@@ -1,6 +1,6 @@
 streamlit
-torch
-torchvision
+torch==2.5.1
+torchvision==0.20.1
 timm==1.0.3
 albumentations
 opencv-python-headless

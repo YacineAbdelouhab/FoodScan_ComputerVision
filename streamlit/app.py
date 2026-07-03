@@ -107,7 +107,7 @@ def load_default():
     cfg   = MODELS[DEFAULT_MODEL]
     path  = hf_hub_download(repo_id=HF_REPO, filename=cfg["file"])
     model = build_model(cfg)
-    model = torch.quantization.quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
+    model = torch.ao.quantization.quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
     ckpt  = torch.load(path, map_location='cpu', weights_only=False)
     model.load_state_dict(ckpt.get('model_state', ckpt))
     model.eval()
@@ -119,7 +119,7 @@ def load_model_cached(name):
     path  = hf_hub_download(repo_id=HF_REPO, filename=cfg["file"])
     model = build_model(cfg)
     if cfg["quantize"]:
-        model = torch.quantization.quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
+        model = torch.ao.quantization.quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
     ckpt  = torch.load(path, map_location='cpu', weights_only=False)
     model.load_state_dict(ckpt.get('model_state', ckpt))
     model.eval()
