@@ -28,12 +28,12 @@ TEXT_DIM = 768
 
 MODELS = {
     "ConvNextV2-AugMax (défaut)": {
-        "file"    : "convnextv2_base_augmax_quantized.pth",
+        "file"    : "convnextv2_base_augmax_full.pth",
         "backbone": "convnextv2_base.fcmae_ft_in22k_in1k",
         "type"    : "imgonly",
-        "quantize": True,
+        "quantize": False,
         "img_size": False,
-        "desc"    : "ConvNextV2-Base, augmentation agressive, quantifié int8 (100 MB). Rapide.",
+        "desc"    : "ConvNextV2-Base, augmentation agressive, image-only.",
     },
     "ConvNextV2-MM": {
         "file"    : "convnextv2_base_mm_full.pth",
@@ -107,7 +107,6 @@ def load_default():
     cfg   = MODELS[DEFAULT_MODEL]
     path  = hf_hub_download(repo_id=HF_REPO, filename=cfg["file"])
     model = build_model(cfg)
-    model = torch.ao.quantization.quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
     ckpt  = torch.load(path, map_location='cpu', weights_only=False)
     model.load_state_dict(ckpt.get('model_state', ckpt))
     model.eval()
@@ -118,8 +117,6 @@ def load_model_cached(name):
     cfg   = MODELS[name]
     path  = hf_hub_download(repo_id=HF_REPO, filename=cfg["file"])
     model = build_model(cfg)
-    if cfg["quantize"]:
-        model = torch.ao.quantization.quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
     ckpt  = torch.load(path, map_location='cpu', weights_only=False)
     model.load_state_dict(ckpt.get('model_state', ckpt))
     model.eval()
