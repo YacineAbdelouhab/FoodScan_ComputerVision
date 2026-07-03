@@ -1,3 +1,4 @@
+import time
 import cv2
 import numpy as np
 import streamlit as st
@@ -20,17 +21,31 @@ IMG_SIZE = 224
 DROPOUT  = 0.25
 PRED_MIN = 30.0
 PRED_MAX = 3600.0
-BACKBONE = "convnextv2_base.fcmae_ft_in22k_in1k"
-FILE     = "convnextv2_base_augmax_full.pth"
+TEXT_DIM = 768
+
+MODELS = {
+    "ConvNextV2-AugMax (image-only)": {
+        "file"    : "convnextv2_base_augmax_full.pth",
+        "backbone": "convnextv2_base.fcmae_ft_in22k_in1k",
+        "type"    : "imgonly",
+        "desc"    : "ConvNextV2-Base, augmentation agressive, image-only.",
+    },
+    "ConvNextV2-MM (image + texte)": {
+        "file"    : "convnextv2_base_mm_full.pth",
+        "backbone": "convnextv2_base.fcmae_ft_in22k_in1k",
+        "type"    : "mm",
+        "desc"    : "ConvNextV2-Base multimodal — image + description textuelle.",
+    },
+}
 
 
-# ── MODEL ─────────────────────────────────────────────────────
+# ── MODEL DEFINITIONS ─────────────────────────────────────────
 
 class ImageOnlyRegressor(nn.Module):
-    def __init__(self):
+    def __init__(self, backbone):
         super().__init__()
-        self.backbone = timm.create_model(BACKBONE, pretrained=False, num_classes=0, global_pool='avg')
-        d = self.backbone.num_features
+        self.backbone = backbone
+        d = backbone.num_features
         self.head = nn.Sequential(
             nn.LayerNorm(d),
             nn.Linear(d, 512), nn.GELU(), nn.Dropout(DROPOUT),
@@ -40,12 +55,31 @@ class ImageOnlyRegressor(nn.Module):
     def forward(self, img):
         return self.head(self.backbone(img)).squeeze(1)
 
+class MultimodalRegressor(nn.Module):
+    def __init__(self, backbone):
+        super().__init__()
+        self.backbone = backbone
+        fused = backbone.num_features + TEXT_DIM
+        self.head = nn.Sequential(
+            nn.LayerNorm(fused),
+            nn.Linear(fused, 512), nn.GELU(), nn.Dropout(DROPOUT),
+            nn.Linear(512, 128),   nn.GELU(), nn.Dropout(DROPOUT / 2),
+            nn.Linear(128, 1),
+        )
+    def forward(self, img, emb):
+        return self.head(torch.cat([self.backbone(img), emb], dim=1)).squeeze(1)
+
 
 @st.cache_resource(show_spinner="Chargement du modèle...")
-def load_model():
-    path  = hf_hub_download(repo_id=HF_REPO, filename=FILE)
-    model = ImageOnlyRegressor()
-    ckpt  = torch.load(path, map_location='cpu', weights_only=False)
+def load_model(name):
+    cfg  = MODELS[name]
+    path = hf_hub_download(repo_id=HF_REPO, filename=cfg["file"])
+    bb   = timm.create_model(cfg["backbone"], pretrained=False, num_classes=0, global_pool='avg')
+    if cfg["type"] == "mm":
+        model = MultimodalRegressor(bb)
+    else:
+        model = ImageOnlyRegressor(bb)
+    ckpt = torch.load(path, map_location='cpu', weights_only=False)
     model.load_state_dict(ckpt.get('model_state', ckpt))
     model.eval()
     return model
@@ -73,7 +107,20 @@ st.subheader("Food Calorie Estimator")
 st.write("Upload a photo of a food dish and the model will estimate its calorie content.")
 st.divider()
 
+choice = st.selectbox("Modèle", options=list(MODELS.keys()), index=0)
+st.caption(MODELS[choice]["desc"])
+
+is_mm = MODELS[choice]["type"] == "mm"
+
 uploaded_file = st.file_uploader("Upload a food image", type=["jpg", "jpeg", "png"])
+
+description = ""
+if is_mm:
+    description = st.text_area(
+        "Décrivez le contenu de l'assiette",
+        placeholder="Ex: pasta bolognaise avec parmesan et basilic...",
+        help="Décrivez les aliments présents pour améliorer la précision."
+    )
 
 if uploaded_file is not None:
     image = Image.open(uploaded_file).convert("RGB")
@@ -85,16 +132,29 @@ if uploaded_file is not None:
 
     with col2:
         try:
-            with st.spinner("Inférence en cours..."):
-                model = load_model()
+            with st.status("Pipeline en cours...", expanded=True) as status:
+                if is_mm and description.strip():
+                    st.write("Encodage de la description...")
+                    time.sleep(0.5)  # feedback visuel
+                    emb = torch.zeros(1, TEXT_DIM)  # embedding zéro (limite RAM cloud)
+                    st.write("✅ Description encodée")
+
+                st.write("Chargement du modèle...")
+                model = load_model(choice)
+                st.write("✅ Modèle chargé")
+
+                st.write("Inférence...")
                 with torch.no_grad():
-                    p      = model(tensor)
-                    p_flip = model(tensor_flip)
+                    if is_mm:
+                        emb = emb if description.strip() else torch.zeros(1, TEXT_DIM)
+                        p, p_flip = model(tensor, emb), model(tensor_flip, emb)
+                    else:
+                        p, p_flip = model(tensor), model(tensor_flip)
                 pred   = float(((p + p_flip) / 2).item())
                 result = float(np.clip(np.expm1(pred), PRED_MIN, PRED_MAX))
+                status.update(label="✅ Terminé", state="complete")
 
             st.metric(label="Calories estimées", value=f"{result:.0f} kcal")
-            st.caption("Modèle : ConvNextV2-Base AugMax")
 
         except Exception as e:
             st.error(f"Erreur : {e}")

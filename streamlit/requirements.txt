@@ -7,4 +7,3 @@ opencv-python-headless
 Pillow
 numpy
 huggingface_hub
-sentence-transformers
